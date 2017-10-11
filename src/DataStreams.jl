@@ -483,6 +483,13 @@ struct Rows{T, NT, S}
     cols::Int
 end
 
+# user-API; construct a Rows object from Data.Schema of source
+function rows(source)
+
+end
+
+Base.eltype(r::Rows{T, NT}) where {T, NT} = NT
+Base.iteratorsize(r::Rows{null}) = Base.SizeUnknown()
 Base.start(r::Rows) = 1
 
 @generated function Base.next(r::Rows{T, NT}, st) where {T, NT}
@@ -495,6 +502,10 @@ end
 
 Base.done(r::Rows{N}, st) where {N} = st > N
 Base.done(r::Rows{null}, st) = Data.isdone(r.source, st, r.cols)
+
+function Base.collect(sink, r::Rows)
+    
+end
 
 # column filtering
  # Data.transforms needs to produce sink schema w/ correct #/types of columns
