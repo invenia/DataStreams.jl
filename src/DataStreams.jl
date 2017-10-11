@@ -95,6 +95,7 @@ transform(sch::Data.Schema, transforms::Dict{String, <:Function}, s) = transform
 # Data.StreamTypes
 abstract type StreamType end
 struct Field <: StreamType end
+struct Row <: StreamType end
 struct Column <: StreamType end
 
 # Data.Source Interface
@@ -193,6 +194,7 @@ Data.streamfrom(source, ::Type{Data.Column}, T, row, col) = Data.streamfrom(sour
 
 # Generic fallbacks
 Data.streamtype(source, ::Type{<:StreamType}) = false
+Data.streamtype(source, ::Type{Row}) = Data.streamtype(source, Field)
 Data.reset!(source) = nothing
 
 struct RandomAccess end
@@ -300,7 +302,7 @@ Data.streamtypes(::Type{MyPkg.Sink}) = [Data.Field]
 
 If, on the other hand, my sink also supported `Data.Column` streaming, and `Data.Column` streaming happend to be more efficient, I could define:
 ```julia
-Data.streamtypes(::Type{MyPkg.Sink}) = [Data.Column, Data.Field] # put Data.Column first to indicate preference
+Data.streamtypes(::Type{MyPkg.Sink}) = [Data.Column, Data.Row, Data.Field] # put Data.Column first to indicate preference
 ```
 """
 function streamtypes end
@@ -310,7 +312,7 @@ function streamtypes end
 
 `Data.streamto!(sink, S::Type{StreamType}, val, row, col, knownrows)`
 
-Streams data to a sink. `S` is the type of streaming (`Data.Field` or `Data.Column`). `val` is the value (single field or column)
+Streams data to a sink. `S` is the type of streaming (`Data.Field`, `Data.Row`, or `Data.Column`). `val` is the value (single field or column)
 to be streamed to the sink. `row` and `col` indicate where the data should be streamed/stored.
 
 A sink may optionally define the method that also accepts the `knownrows` argument, which will be `true` or `false`,
@@ -474,6 +476,26 @@ function Data.stream!(source::So, sink::Si;
     throw(ArgumentError("`source` doesn't support the supported streaming types of `sink`: $sinkstreamtypes"))
 end
 
+# DataFrames, CSV, SQLite, Feather, ODBC
+# T is knownrows
+struct Rows{T, NT, S}
+    source::S
+    cols::Int
+end
+
+Base.start(r::Rows) = 1
+
+@generated function Base.next(r::Rows{T, NT}, st) where {T, NT}
+    # generate vals tuple of entire row values
+    # @nexprs of Data.streamfrom(r.source, )
+    quote
+        return Base.namedtuple($NT, $(vals...))
+    end
+end
+
+Base.done(r::Rows{N}, st) where {N} = st > N
+Base.done(r::Rows{null}, st) = Data.isdone(r.source, st, r.cols)
+
 # column filtering
  # Data.transforms needs to produce sink schema w/ correct #/types of columns
  # if RandomAccess
@@ -539,7 +561,7 @@ end
 end
 
 function generate_loop(::Type{Val{knownrows}}, ::Type{S}, inner_loop) where {knownrows, S <: StreamType}
-    if knownrows && S == Data.Field
+    if knownrows && (S == Data.Field || S == Data.Row()
         # println("generating loop w/ known rows...")
         loop = quote
             for row = 1:rows
